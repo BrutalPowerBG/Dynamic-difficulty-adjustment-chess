@@ -1,33 +1,111 @@
 import chess
 import chess.engine
+import chess.svg
 import random
 import tkinter as tk
 from PIL import Image, ImageTk
 import os
-
-# Create a Tkinter window
-root = tk.Tk()
-root.title("Chess Game")
-
-# Create a Canvas widget to draw the chessboard
-canvas = tk.Canvas(root, width=400, height=400)
-canvas.pack()
 
 
 # Path to Stockfish executable
 stockfish_path = "./stockfish/stockfish-windows-x86-64-avx2.exe"
 board = chess.Board()
 side = None
+image = None
+
+class ChessUI(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        
+        self.title("Chess UI")
+        self.geometry("400x400")
+
+        self.board = chess.Board()
+
+        self.canvas = tk.Canvas(self, width=400, height=400)
+        self.canvas.pack()
+
+        self.draw_board()
+        self.piece_images=[]
+        self.draw_pieces(self.board)
+
+    def draw_board(self):
+        for row in range(8):
+            for col in range(8):
+                color = "white" if (row + col) % 2 == 0 else "gray"
+                self.canvas.create_rectangle(col * 50, row * 50, (col + 1) * 50, (row + 1) * 50, fill=color)
+
+    def draw_pieces(self, board):
+        # Clear the pieces first to avoid duplications
+        self.clear_pieces()
+
+        # Redraw the pieces
+        for square in chess.SQUARES:
+            piece = board.piece_at(square)
+            if piece is not None:
+                piece_image = self.get_piece_image(piece)
+                self.piece_images.append(piece_image)
+                
+                coords = self.square_to_coords(square)
+                if piece_image is not None:
+                    self.canvas.create_image(coords, image=piece_image, anchor="c", tags="piece")
+                else:
+                    print(f"Failed to load image for piece at square {square}.")
+                
+    def clear_pieces(self):
+        # Clear only the pieces by deleting items with the "piece" tag
+        self.canvas.delete("piece")
+        self.piece_images=[]
+
+    def get_piece_image(self, piece):        
+        # Directory containing the images
+        image_dir = "./Images/"
+
+        # Dictionary mapping piece symbols to image file names
+        piece_images = {
+            'r': os.path.join(image_dir, 'black_rook.png'),
+            'n': os.path.join(image_dir, 'black_knight.png'),
+            'b': os.path.join(image_dir, 'black_bishop.png'),
+            'q': os.path.join(image_dir, 'black_queen.png'),
+            'k': os.path.join(image_dir, 'black_king.png'),
+            'p': os.path.join(image_dir, 'black_pawn.png'),
+            'R': os.path.join(image_dir, 'white_rook.png'),
+            'N': os.path.join(image_dir, 'white_knight.png'),
+            'B': os.path.join(image_dir, 'white_bishop.png'),
+            'Q': os.path.join(image_dir, 'white_queen.png'),
+            'K': os.path.join(image_dir, 'white_king.png'),
+            'P': os.path.join(image_dir, 'white_pawn.png')
+        }
+        piece_symbol = piece.symbol()
+        
+        image_filename = piece_images.get(piece_symbol, None)
+        global image
+        image = Image.open(image_filename)
+        resized_image = image.resize((50, 50), Image.LANCZOS)
+        imageTk = ImageTk.PhotoImage(resized_image, name = piece_symbol)
+        return imageTk
+
+    def square_to_coords(self, square):
+        file, rank = chess.square_file(square), chess.square_rank(square)
+        x = (file * 50) + 25
+        y = (7 - rank) * 50 + 25
+        return x, y
+
+
+chess_ui = ChessUI()
+#chess_ui.mainloop()
+
 
 def play_game():
+    
+    
     global side
     side = get_user_side()
+    
     if side == None:
         while not board.is_game_over():
             # Display the current board state
             print_board(board)
-            #TODO: replace this with canvas tk!!!!!!!!!!!!!!!!!
-            print("\n")
 
             play_engine_turn(board)
             
@@ -52,50 +130,53 @@ def play_game():
     
 def print_board(board):
     print(board)
-    # Clear the canvas
-    canvas.delete("all")
+    print("\n")
     
-    # Draw the chessboard squares
-    for row in range(8):
-        for col in range(8):
-            color = "white" if (row + col) % 2 == 0 else "gray"
-            canvas.create_rectangle(col * 50, row * 50, (col + 1) * 50, (row + 1) * 50, fill=color)
+    global chess_ui
+    chess_ui.draw_pieces(board)    
+    # # Clear the canvas
+    # canvas.delete("all")
     
-    # Directory containing the images
-    image_dir = "./Images/"
+    # # Draw the chessboard squares
+    # for row in range(8):
+    #     for col in range(8):
+    #         color = "white" if (row + col) % 2 == 0 else "gray"
+    #         canvas.create_rectangle(col * 50, row * 50, (col + 1) * 50, (row + 1) * 50, fill=color)
+    
+    # # Directory containing the images
+    # image_dir = "./Images/"
 
-    # Dictionary mapping piece symbols to image file names
-    piece_images = {
-        'r': os.path.join(image_dir, 'black_rook.png'),
-        'n': os.path.join(image_dir, 'black_knight.png'),
-        'b': os.path.join(image_dir, 'black_bishop.png'),
-        'q': os.path.join(image_dir, 'black_queen.png'),
-        'k': os.path.join(image_dir, 'black_king.png'),
-        'p': os.path.join(image_dir, 'black_pawn.png'),
-        'R': os.path.join(image_dir, 'white_rook.png'),
-        'N': os.path.join(image_dir, 'white_knight.png'),
-        'B': os.path.join(image_dir, 'white_bishop.png'),
-        'Q': os.path.join(image_dir, 'white_queen.png'),
-        'K': os.path.join(image_dir, 'white_king.png'),
-        'P': os.path.join(image_dir, 'white_pawn.png')
-    }
+    # # Dictionary mapping piece symbols to image file names
+    # piece_images = {
+    #     'r': os.path.join(image_dir, 'black_rook.png'),
+    #     'n': os.path.join(image_dir, 'black_knight.png'),
+    #     'b': os.path.join(image_dir, 'black_bishop.png'),
+    #     'q': os.path.join(image_dir, 'black_queen.png'),
+    #     'k': os.path.join(image_dir, 'black_king.png'),
+    #     'p': os.path.join(image_dir, 'black_pawn.png'),
+    #     'R': os.path.join(image_dir, 'white_rook.png'),
+    #     'N': os.path.join(image_dir, 'white_knight.png'),
+    #     'B': os.path.join(image_dir, 'white_bishop.png'),
+    #     'Q': os.path.join(image_dir, 'white_queen.png'),
+    #     'K': os.path.join(image_dir, 'white_king.png'),
+    #     'P': os.path.join(image_dir, 'white_pawn.png')
+    # }
     
-    # Draw the chess pieces
-    for square in chess.SQUARES:
-        piece = board.piece_at(square)
-        if piece is not None:
-            image_filename = piece_images.get(piece.symbol(), None)
-            if image_filename is not None:
-                image = Image.open(image_filename)
-                resized_image = image.resize((50, 50), Image.LANCZOS)
-                photo = ImageTk.PhotoImage(resized_image)
-                canvas.create_image(chess.square_file(square) * 50, (7 - chess.square_rank(square)) * 50, image=photo, anchor="nw")
-                canvas.photo = photo  # Save reference to prevent image from being garbage collected
+    # # Draw the chess pieces
+    # for square in chess.SQUARES:
+    #     piece = board.piece_at(square)
+    #     if piece is not None:
+    #         image_filename = piece_images.get(piece.symbol(), None)
+    #         if image_filename is not None:
+    #             image = Image.open(image_filename)
+    #             resized_image = image.resize((50, 50), Image.LANCZOS)
+    #             photo = ImageTk.PhotoImage(resized_image)
+    #             canvas.create_image(chess.square_file(square) * 50, (7 - chess.square_rank(square)) * 50, image=photo, anchor="nw")
+    #             canvas.photo = photo  # Save reference to prevent image from being garbage collected
     
 
 def play_player_turn(board):
     while True:
-        print("\n")
         user_move = input("Enter your move: ")
         move = parse_move_string(user_move, board)
 
