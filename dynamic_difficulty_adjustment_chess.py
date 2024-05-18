@@ -5,6 +5,7 @@ import random
 import tkinter as tk
 from PIL import Image, ImageTk
 import os
+import time
 
 
 # Path to Stockfish executable
@@ -14,34 +15,52 @@ side = None
 image = None
 
 class ChessUI(tk.Tk):
-    def __init__(self):
+    def __init__(self, width=400, height=400):
         super().__init__()
         
         self.title("Chess UI")
-        self.geometry("400x400")
+        self.geometry(f"{width}x{height}")
+        self.width = width
+        self.height = height
 
-        self.board = chess.Board()
+        global board
+        self.board = board
 
-        self.canvas = tk.Canvas(self, width=400, height=400)
+        self.canvas = tk.Canvas(self, width=width, height=height)
         self.canvas.pack()
+        
+        self.square_size = min(width, height) // 8
+        self.piece_images = []
 
         self.draw_board()
-        self.piece_images=[]
-        self.draw_pieces(self.board)
+        self.draw_pieces()
+        
+        # Bind mouse click events to handle player input
+        self.canvas.bind("<Button-1>", self.on_square_click)
+
+        # Variables to store clicked square and selected piece
+        self.selected_square = None
+        self.selected_piece = None
 
     def draw_board(self):
         for row in range(8):
             for col in range(8):
                 color = "white" if (row + col) % 2 == 0 else "gray"
-                self.canvas.create_rectangle(col * 50, row * 50, (col + 1) * 50, (row + 1) * 50, fill=color)
+                self.canvas.create_rectangle(
+                    col * self.square_size, 
+                    row * self.square_size, 
+                    (col + 1) * self.square_size, 
+                    (row + 1) * self.square_size, 
+                    fill=color
+                )
 
-    def draw_pieces(self, board):
+    def draw_pieces(self):
         # Clear the pieces first to avoid duplications
         self.clear_pieces()
 
         # Redraw the pieces
         for square in chess.SQUARES:
-            piece = board.piece_at(square)
+            piece = self.board.piece_at(square)
             if piece is not None:
                 piece_image = self.get_piece_image(piece)
                 self.piece_images.append(piece_image)
@@ -81,18 +100,61 @@ class ChessUI(tk.Tk):
         image_filename = piece_images.get(piece_symbol, None)
         global image
         image = Image.open(image_filename)
-        resized_image = image.resize((50, 50), Image.LANCZOS)
-        imageTk = ImageTk.PhotoImage(resized_image, name = piece_symbol)
-        return imageTk
+        if image_filename:
+            image = Image.open(image_filename)
+            resized_image = image.resize((self.square_size, self.square_size), Image.LANCZOS)
+            imageTk = ImageTk.PhotoImage(resized_image, name=piece_symbol)
+            return imageTk
+        else:
+            print(f"Failed to load image for piece {piece_symbol}.")
+            return None
 
     def square_to_coords(self, square):
         file, rank = chess.square_file(square), chess.square_rank(square)
-        x = (file * 50) + 25
-        y = (7 - rank) * 50 + 25
+        x = (file * self.square_size) + self.square_size // 2
+        y = ((7 - rank) * self.square_size) + self.square_size // 2
         return x, y
+    
+    def on_square_click(self, event):
+        # Convert click coordinates to square
+        col = event.x // self.square_size
+        row = 7 - (event.y // self.square_size)
+        square = chess.square(col, row)
 
+        if self.selected_square is None:
+            # No square previously clicked
+            self.selected_square = square
+            self.selected_piece = self.board.piece_at(square)
+        else:
+            if self.selected_square != square:
+                # Move the piece if it's a legal move
+                if self.selected_piece:
+                    move = chess.Move(self.selected_square, square)
+                    if move in self.board.legal_moves:
+                        # Assign board side if there is none selected 
+                        global side
+                        if side == None:
+                            side = self.selected_piece.color
+                            
+                        self.board.push(move)
+                        self.selected_piece = None
+                        self.draw_pieces()
+                        
+                        # Update the UI to show the pieces before the engine calculates its move
+                        self.update_idletasks()
+                        
+                        play_engine_turn(self.board)
+                    else:
+                        self.selected_piece = None
+                else:
+                    piece = self.board.piece_at(square)
+                    if piece is not None and piece.color == self.board.turn:
+                        self.selected_piece = square
+                    self.selected_square = square
+                    
+            
 
-chess_ui = ChessUI()
+chess_ui = ChessUI(800, 800)
 #chess_ui.mainloop()
 
 
@@ -101,6 +163,7 @@ def play_game():
     
     global side
     side = get_user_side()
+    print_board(board)
     
     if side == None:
         while not board.is_game_over():
@@ -112,7 +175,7 @@ def play_game():
     else:
         if side == chess.WHITE:
             while not board.is_game_over():
-                print_board(board)
+               
                 if board.turn == chess.WHITE:
                     play_player_turn(board)
                 else:
@@ -133,47 +196,7 @@ def print_board(board):
     print("\n")
     
     global chess_ui
-    chess_ui.draw_pieces(board)    
-    # # Clear the canvas
-    # canvas.delete("all")
-    
-    # # Draw the chessboard squares
-    # for row in range(8):
-    #     for col in range(8):
-    #         color = "white" if (row + col) % 2 == 0 else "gray"
-    #         canvas.create_rectangle(col * 50, row * 50, (col + 1) * 50, (row + 1) * 50, fill=color)
-    
-    # # Directory containing the images
-    # image_dir = "./Images/"
-
-    # # Dictionary mapping piece symbols to image file names
-    # piece_images = {
-    #     'r': os.path.join(image_dir, 'black_rook.png'),
-    #     'n': os.path.join(image_dir, 'black_knight.png'),
-    #     'b': os.path.join(image_dir, 'black_bishop.png'),
-    #     'q': os.path.join(image_dir, 'black_queen.png'),
-    #     'k': os.path.join(image_dir, 'black_king.png'),
-    #     'p': os.path.join(image_dir, 'black_pawn.png'),
-    #     'R': os.path.join(image_dir, 'white_rook.png'),
-    #     'N': os.path.join(image_dir, 'white_knight.png'),
-    #     'B': os.path.join(image_dir, 'white_bishop.png'),
-    #     'Q': os.path.join(image_dir, 'white_queen.png'),
-    #     'K': os.path.join(image_dir, 'white_king.png'),
-    #     'P': os.path.join(image_dir, 'white_pawn.png')
-    # }
-    
-    # # Draw the chess pieces
-    # for square in chess.SQUARES:
-    #     piece = board.piece_at(square)
-    #     if piece is not None:
-    #         image_filename = piece_images.get(piece.symbol(), None)
-    #         if image_filename is not None:
-    #             image = Image.open(image_filename)
-    #             resized_image = image.resize((50, 50), Image.LANCZOS)
-    #             photo = ImageTk.PhotoImage(resized_image)
-    #             canvas.create_image(chess.square_file(square) * 50, (7 - chess.square_rank(square)) * 50, image=photo, anchor="nw")
-    #             canvas.photo = photo  # Save reference to prevent image from being garbage collected
-    
+    chess_ui.draw_pieces()    
 
 def play_player_turn(board):
     while True:
@@ -183,6 +206,7 @@ def play_player_turn(board):
         if move in board.legal_moves:
             # Make the move on the board
             board.push(move)
+            print_board(board)
             return move 
         else:
             print("Illegal move. Try again.")
@@ -237,6 +261,7 @@ def play_engine_turn(board):
         # Make the closest_to_zero move on the board
         board.push(move_obj)
         
+        print_board(board)
         # # Get the best move from Stockfish
         # result = engine.play(board, chess.engine.Limit(time=2.0))
         # move_uci = result.move.uci()
