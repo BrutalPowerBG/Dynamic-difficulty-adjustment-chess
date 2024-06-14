@@ -5,14 +5,128 @@ import random
 import tkinter as tk
 from PIL import Image, ImageTk
 import os
-import time
+
+######################################################################################                   
+# Pre-Setup
+# Most of these global variables will be defined in  global_parameter_definitions()
+# Variables with comments next to them will likely not be defined in  global_parameter_definitions()
+######################################################################################
+chess_ui = None
+#chess_ui.mainloop()
+stockfish_path = None
+board = None
+side = None # Will be set by player
+image = None # Declared only to store piece images in the global scope so they aren't deleted by Tkinter
+player_rating = None
+move_random_range = None
 
 
-# Path to Stockfish executable
-stockfish_path = "./stockfish/stockfish-windows-x86-64-avx2.exe"
-board = chess.Board()
-side = None
-image = None
+# Bounded value between 0 and 1
+class Percent:
+    def __init__(self, initial_value, is_fraction = True):
+        self._value = None
+        if is_fraction:
+            self.value = initial_value
+        else:
+            self.value = initial_value / 100
+
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self, new_value):
+        if 0 <= new_value <= 1:
+            self._value = new_value
+        elif new_value < 0:
+            self._value = 0
+        elif new_value > 1:
+            self._value = 1
+        else:
+            raise ValueError("Value must be between 0 and 1")
+        
+# Move
+class Move:
+    def __init__(self, board, move_uci, evaluation = None):
+        self._board = board
+        self._move_uci = move_uci
+        self._evaluation = None
+        if evaluation:
+            self._evaluation = evaluation
+        # Eval is transformed into a percent between 0 and 100
+        self._move_accuracy = self.get_move_accuracy()
+        
+    def get_move_evaluation(self):
+        return get_move_evaluation(self._board, self._move_uci)
+
+    def get_move_accuracy(self):
+       #Get all evaluations
+        all_evaluations = get_all_evaluations(self._board)
+        
+        best_move = all_evaluations[0]
+        worst_move = all_evaluations[len(all_evaluations) - 1]
+        
+        move_played_evaluation = None
+        for move, evaluation in all_evaluations:
+            if move == self._move_uci:
+                move_played_evaluation = evaluation
+                self._evaluation = evaluation
+                break
+        if move_played_evaluation is None:
+            raise ValueError("Move evaluation not found")
+
+        # Ensure we don't divide by zero
+        if best_move[1] == worst_move[1]:
+            move_accuracy = 1.0
+        else:
+            move_accuracy = abs(move_played_evaluation - worst_move[1]) / abs(best_move[1] - worst_move[1]) 
+        move_accuracy = Percent(move_accuracy).value
+        return move_accuracy
+    
+
+
+# Player rating
+class Rating:
+    def __init__(self, initial_value=0.5):
+        # Rating is clamped between 0 and 1
+        self._value = Percent(initial_value).value
+        self._certainty = Percent(0).value
+        self._turns_played = 0
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self, new_value):
+        self._value = Percent(new_value).value        
+        
+    @property
+    def certainty(self):
+       return self._certainty
+   
+    @certainty.setter
+    def certainty(self, new_certainty):
+        self._certainty = Percent(new_certainty).value
+        
+    @property
+    def turns_played(self):
+       return self._turns_played
+   
+    def increment_turns_played(self):
+        self._turns_played += 1
+        
+    def update_rating_with_move_accuracy(self, accuracy):
+        turns = self._turns_played
+        old_rating = self._value
+        # How much the new accuracy is relevant compared to the old accuracies 
+        accuracy_multiplier = 3
+        new_rating = ( old_rating * turns + accuracy * accuracy_multiplier) / (turns + 1 + accuracy_multiplier)
+        self._value = new_rating
+        if self._certainty < 1:
+            self._certainty += 0.02
+        return new_rating
+
+
 
 class ChessUI(tk.Tk):
     def __init__(self, width=400, height=400):
@@ -128,20 +242,23 @@ class ChessUI(tk.Tk):
         else:
             if self.selected_square != square:
                 # Move the piece if it's a legal move
-                if self.selected_piece:
+                if self.selected_piece is not None:
                     move = chess.Move(self.selected_square, square)
                     if move in self.board.legal_moves:
                         # Assign board side if there is none selected 
                         global side
                         if side == None:
                             side = self.selected_piece.color
-                            
+
+                        old_board = board.copy()
                         self.board.push(move)
                         self.selected_piece = None
                         self.draw_pieces()
                         
                         # Update the UI to show the pieces before the engine calculates its move
                         self.update_idletasks()
+                        
+                        update_player_rating(old_board, move)
                         
                         play_engine_turn(self.board)
                     else:
@@ -151,15 +268,34 @@ class ChessUI(tk.Tk):
                     if piece is not None and piece.color == self.board.turn:
                         self.selected_piece = square
                     self.selected_square = square
-                    
-            
+ 
 
-chess_ui = ChessUI(800, 800)
-#chess_ui.mainloop()
 
+######################################################################################  
+# Setup
+###################################################################################### 
+def global_parameter_definitions():
+    # Set the logical board
+    global board
+    board = chess.Board()
+    # Set board scale
+    global chess_ui_scale 
+    chess_ui_scale = 800
+    # Show chess UI board
+    global chess_ui
+    chess_ui = ChessUI(800, 800)
+    # Set Stockfish path
+    global stockfish_path
+    stockfish_path = "./stockfish/stockfish-windows-x86-64-avx2.exe"
+    # Set player rating
+    global player_rating
+    player_rating = Rating(50)
+    # This random range will define how close the bot can search around the evaluation to alternate and play a different move 
+    global move_random_range
+    move_random_range = 0.2
 
 def play_game():
-    
+    global_parameter_definitions()
     
     global side
     side = get_user_side()
@@ -204,6 +340,7 @@ def play_player_turn(board):
         move = parse_move_string(user_move, board)
 
         if move in board.legal_moves:
+            update_player_rating(board, move)
             # Make the move on the board
             board.push(move)
             print_board(board)
@@ -225,48 +362,29 @@ def parse_move_string(move_str, board):
 
     return move
 
+def update_player_rating(board, move_played):    
+    move = Move(board, move_played.uci())
+    accuracy = move.get_move_accuracy()
+    player_rating.update_rating_with_move_accuracy(accuracy)
+    player_rating.increment_turns_played()
+    
 
 def play_engine_turn(board):
-    with chess.engine.SimpleEngine.popen_uci(stockfish_path) as engine:
-        # Initialize variables for the move closest to evaluation 0
-        closest_to_zero_move = None
-        closest_to_zero_eval_diff = float('inf')  # Initialize to positive infinity
+    #Get all evaluations and print them
+    all_evaluations = get_all_evaluations(board)
+    print_evaluations(all_evaluations)
+    
+    move_to_play = decide_move_to_play(all_evaluations)
+    move_san = board.san(chess.Move.from_uci(str(move_to_play)))
+    
+    print("Engine played move: ", move_san)
 
-        #Get all evaluations and print them
-        all_evaluations = get_all_evaluations(board)
-        print_evaluations(all_evaluations)
-        
-        move_to_play = decide_move_to_play(all_evaluations)
-        move_san = board.san(chess.Move.from_uci(str(move_to_play)))
-       
-        print("Engine played move: ", move_san)
-        # # Get all legal moves
-        # legal_moves = list(board.legal_moves)
-        # for move in legal_moves:
-        #     # Make the move on a copy of the board
-        #     board_copy = board.copy()
-        #     board_copy.push(move)
-
-        #     # Evaluate the position after the move
-        #     result = engine.analyse(board_copy, chess.engine.Limit(time=2.0))
-        #     eval_diff = abs(result["score"].relative.score(mate_score=2000) / 100)  # Evaluation difference
-
-        #     # Update the closest_to_zero move if the current move is closer to evaluation 0
-        #     if eval_diff < closest_to_zero_eval_diff:
-        #         closest_to_zero_move = move
-        #         closest_to_zero_eval_diff = eval_diff
-
-         # Convert the UCI string to a Move object
-        move_obj = parse_move_string(move_to_play, board)
-        # Make the closest_to_zero move on the board
-        board.push(move_obj)
-        
-        print_board(board)
-        # # Get the best move from Stockfish
-        # result = engine.play(board, chess.engine.Limit(time=2.0))
-        # move_uci = result.move.uci()
-        # # Make the move on the board
-        # board.push_uci(move_uci)
+        # Convert the UCI string to a Move object
+    move_obj = parse_move_string(move_to_play, board)
+    # Make the closest_to_zero move on the board
+    board.push(move_obj)
+    
+    print_board(board)
 
 
 def get_all_evaluations(board):
@@ -284,19 +402,36 @@ def get_all_evaluations(board):
             board_copy.push(move)
 
             # Evaluate the position after the move
-            result = engine.analyse(board_copy, chess.engine.Limit(time=1.0))
+            result = engine.analyse(board_copy, chess.engine.Limit(time=0.1))
             # Convert the score to a numeric value
             evaluations[move.uci()] = result["score"].relative.score(mate_score=2000)  
             #Divide the score by 100 to make it closer to chess.com evaluation
             evaluations[move.uci()] = evaluations[move.uci()]/100
 
-            #Make it so that the score is actually 
+            #Make it so that the score is actually correct
             if white_to_move:
                 evaluations[move.uci()] = -evaluations[move.uci()]
     # Sort the evaluations by score in descending order
     sorted_evaluations = sorted(evaluations.items(), key=lambda x: x[1], reverse=white_to_move)
 
     return sorted_evaluations
+
+def get_move_evaluation(board, move):
+    with chess.engine.SimpleEngine.popen_uci(stockfish_path) as engine:
+        # Make the move on a copy of the board
+        board_copy = board.copy()
+        board_copy.push(move)
+
+        # Evaluate the position after the move
+        result = engine.analyse(board_copy, chess.engine.Limit(time=0.1))
+        #Divide the score by 100 to make it closer to chess.com evaluation
+        evaluation = result["score"].relative.score(mate_score=2000) / 100
+
+        # Adjust the evaluation based on whose turn it is
+        if board.turn == chess.WHITE:
+            evaluation = -evaluation
+
+    return evaluation
 
 def print_evaluations(all_evaluations):
     print("Move\t\t\tScore")
@@ -307,25 +442,65 @@ def print_evaluations(all_evaluations):
     print("\n")
     
 def decide_move_to_play(all_evaluations):
+    #TO DO: include this move_random_range
     if len(all_evaluations) == 1:
         return all_evaluations[0]
-    closest_to_zero_move = min(all_evaluations, key=lambda x: abs(x[1]))
-    move = closest_to_zero_move[0]
     
-    #This variable makes the computer choose the best move instead of the closest to zero if the difference between the first best move and the closest to zero is too high
-    min_difference_between_move_ranking_for_overriding_closest_to_zero = 2.5
+    closest_to_zero_move = min(all_evaluations, key=lambda x: abs(x[1]))
+    # Default move
+    move = closest_to_zero_move
+    
+    #TO DO: Fix the sorted evaluations order for black (where they are sorted)
+    best_move = all_evaluations[0]
+    worst_move = all_evaluations[len(all_evaluations) - 1]
+    # Ensure we don't divide by zero in the linear interpolation
+    if best_move[1] == worst_move[1]:
+        return move[0]
+    
+    rating = player_rating.value
+    # Calculate move eval based on rating
+    # Linear interpolation between best_move and worst_move with rating being between 0 and 1, swaying to worst_move or best_move respectively
+    move_evaluation_based_on_rating = linearly_interpolate(worst_move[1], best_move[1], rating)
+    
+    # Balance move with board state 
+    # Linearly interpolate between evaluation based on rating and closest to zero move, based on % certainty of the player rating
+    if closest_to_zero_move[1] < move_evaluation_based_on_rating:
+        move_evaluation_based_on_rating = linearly_interpolate(closest_to_zero_move[1], move_evaluation_based_on_rating, player_rating.certainty)
+    else:
+        move_evaluation_based_on_rating = linearly_interpolate(move_evaluation_based_on_rating, closest_to_zero_move[1], 1- player_rating.certainty)
+
+    # Punish mistakes
+    # This variable makes the computer improve the targeted move evaluation if the difference between the first best move and the closest to zero is too high
+    min_difference_to_choose_better_value = 2.5
+    # This variable determines the power to which the rating determines the interpolation - Higher values of Power means less interpolation, but the higher the player's rating is, the more he is punished for mistakes 
+    rating_power = 3
     global side
     if side == chess.BLACK:
-        best_for_white = max(all_evaluations, key=lambda x: x[1])
-        if best_for_white[1]>closest_to_zero_move[1] + min_difference_between_move_ranking_for_overriding_closest_to_zero:
-            move = best_for_white[0]
+        if best_move[1]>move_evaluation_based_on_rating + min_difference_to_choose_better_value:
+            move_evaluation_based_on_rating = linearly_interpolate(move_evaluation_based_on_rating, best_move[1], rating ** rating_power)
     elif side == chess.WHITE:
-        best_for_black = all_evaluations[0]
-        if best_for_black[1]<closest_to_zero_move[1] - min_difference_between_move_ranking_for_overriding_closest_to_zero:
-            move = best_for_black[0]
+        if best_move[1]<move_evaluation_based_on_rating - min_difference_to_choose_better_value:
+            move_evaluation_based_on_rating = linearly_interpolate(move_evaluation_based_on_rating, best_move[1], rating ** rating_power)
     
-        
-    return move
+    move = get_move_closest_to_eval(move_evaluation_based_on_rating, all_evaluations)
+    return move[0]
+
+def linearly_interpolate(worse_move, better_move, weight):
+    return weight*(better_move - worse_move) + worse_move
+    
+    
+def get_move_closest_to_eval(target_eval, all_evaluations):
+    closest_move = None
+    closest_diff = float('inf')
+    
+    for move, evaluation in all_evaluations:
+        diff = abs(evaluation - target_eval)
+        if diff < closest_diff:
+            closest_diff = diff
+            closest_move = (move, evaluation)
+            
+    return closest_move
+    
 
 def get_play_or_watch():
     while True:
