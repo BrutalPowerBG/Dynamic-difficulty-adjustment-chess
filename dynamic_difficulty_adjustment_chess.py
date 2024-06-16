@@ -119,8 +119,10 @@ class Rating:
         turns = self._turns_played
         old_rating = self._value
         # How much the new accuracy is relevant compared to the old accuracies 
-        accuracy_multiplier = 3
-        new_rating = ( old_rating * turns + accuracy * accuracy_multiplier) / (turns + 1 + accuracy_multiplier)
+        accuracy_multiplier = 3 + min((turns/5), 10)
+        # If you make a mistake, drop the rating further so that you can catch up with the engine
+        accuracy_empower = 3
+        new_rating = ( old_rating * turns + (accuracy ** accuracy_empower) * accuracy_multiplier) / (turns + accuracy_multiplier)
         self._value = new_rating
         if self._certainty < 1:
             self._certainty += 0.02
@@ -294,9 +296,7 @@ def global_parameter_definitions():
     global move_random_range
     move_random_range = 0.2
 
-def play_game():
-    global_parameter_definitions()
-    
+def play_game():    
     global side
     side = get_user_side()
     print_board(board)
@@ -442,7 +442,6 @@ def print_evaluations(all_evaluations):
     print("\n")
     
 def decide_move_to_play(all_evaluations):
-    #TO DO: include this move_random_range
     if len(all_evaluations) == 1:
         return all_evaluations[0]
     
@@ -450,7 +449,6 @@ def decide_move_to_play(all_evaluations):
     # Default move
     move = closest_to_zero_move
     
-    #TO DO: Fix the sorted evaluations order for black (where they are sorted)
     best_move = all_evaluations[0]
     worst_move = all_evaluations[len(all_evaluations) - 1]
     # Ensure we don't divide by zero in the linear interpolation
@@ -463,15 +461,16 @@ def decide_move_to_play(all_evaluations):
     move_evaluation_based_on_rating = linearly_interpolate(worst_move[1], best_move[1], rating)
     
     # Balance move with board state 
-    # Linearly interpolate between evaluation based on rating and closest to zero move, based on % certainty of the player rating
-    if closest_to_zero_move[1] < move_evaluation_based_on_rating:
-        move_evaluation_based_on_rating = linearly_interpolate(closest_to_zero_move[1], move_evaluation_based_on_rating, player_rating.certainty)
+    # Linearly interpolate between evaluation based on rating and zero eval move, based on % certainty of the player rating
+    # weight = min(1, player_rating.certainty + abs(best_move[1]/10))
+    if move_evaluation_based_on_rating > 0:
+        move_evaluation_based_on_rating = linearly_interpolate(0, move_evaluation_based_on_rating, player_rating.certainty)
     else:
-        move_evaluation_based_on_rating = linearly_interpolate(move_evaluation_based_on_rating, closest_to_zero_move[1], 1- player_rating.certainty)
+        move_evaluation_based_on_rating = linearly_interpolate(move_evaluation_based_on_rating, 0, 1 - player_rating.certainty)
 
     # Punish mistakes
     # This variable makes the computer improve the targeted move evaluation if the difference between the first best move and the closest to zero is too high
-    min_difference_to_choose_better_value = 2.5
+    min_difference_to_choose_better_value = 1.0
     # This variable determines the power to which the rating determines the interpolation - Higher values of Power means less interpolation, but the higher the player's rating is, the more he is punished for mistakes 
     rating_power = 3
     global side
@@ -482,7 +481,18 @@ def decide_move_to_play(all_evaluations):
         if best_move[1]<move_evaluation_based_on_rating - min_difference_to_choose_better_value:
             move_evaluation_based_on_rating = linearly_interpolate(move_evaluation_based_on_rating, best_move[1], rating ** rating_power)
     
-    move = get_move_closest_to_eval(move_evaluation_based_on_rating, all_evaluations)
+    # Gets a random move within the range
+    moves_in_range_close = get_moves_within_range(move_evaluation_based_on_rating, all_evaluations, move_random_range)
+    if len(moves_in_range_close) > 0:
+        move = random.choice(moves_in_range_close)
+    else:
+        # If there are no moves in the close range, find a move where a weaker piece captures a higher value piece
+        moves_in_range_long = get_moves_within_range(move_evaluation_based_on_rating, all_evaluations, move_random_range * 10, True)
+        if len(moves_in_range_long) > 0:
+            move = random.choice(moves_in_range_long)
+        else:
+            # If we still can't find a move, just get the closest move to evaluation
+            move = get_move_closest_to_eval(move_evaluation_based_on_rating, all_evaluations)
     return move[0]
 
 def linearly_interpolate(worse_move, better_move, weight):
@@ -500,7 +510,39 @@ def get_move_closest_to_eval(target_eval, all_evaluations):
             closest_move = (move, evaluation)
             
     return closest_move
+
+def get_moves_within_range(target_eval, all_evaluations, range, is_capture = False):
+    # Define the range
+    lower_bound = target_eval - range
+    upper_bound = target_eval + range
     
+    # Get moves within the specified range
+    moves_in_range = [
+        (move, evaluation)
+        for move, evaluation in all_evaluations if lower_bound <= evaluation <= upper_bound and (not is_capture or is_capture_by_weaker_piece(board, move))]
+
+    return moves_in_range
+    
+def is_capture_by_weaker_piece(board, move):
+    piece_values = {
+        chess.PAWN: 1,
+        chess.KNIGHT: 3,
+        chess.BISHOP: 3,
+        chess.ROOK: 5,
+        chess.QUEEN: 9,
+        chess.KING: float('inf')
+    }
+
+    capturing_piece = board.piece_at(chess.Move.from_uci(move).from_square)
+    captured_piece = board.piece_at(chess.Move.from_uci(move).to_square)
+
+    if captured_piece is None:
+        return False  # Not a capture move
+
+    capturing_value = piece_values[capturing_piece.piece_type]
+    captured_value = piece_values[captured_piece.piece_type]
+
+    return capturing_value < captured_value
 
 def get_play_or_watch():
     while True:
@@ -541,4 +583,5 @@ def display_final_board_state(board):
     print("Game Over")
 
 if __name__ == "__main__":
+    global_parameter_definitions()
     play_game()
