@@ -114,15 +114,14 @@ class Rating:
    
     def increment_turns_played(self):
         self._turns_played += 1
+        print('Turn: ', self._turns_played)
         
     def update_rating_with_move_accuracy(self, accuracy):
         turns = self._turns_played
         old_rating = self._value
         # How much the new accuracy is relevant compared to the old accuracies 
-        accuracy_multiplier = 3 + min((turns/5), 10)
-        # If you make a mistake, drop the rating further so that you can catch up with the engine
-        accuracy_empower = 3
-        new_rating = ( old_rating * turns + (accuracy ** accuracy_empower) * accuracy_multiplier) / (turns + accuracy_multiplier)
+        accuracy_multiplier = 2 + min((turns/3.5), 12)
+        new_rating = ( old_rating * turns + accuracy  * accuracy_multiplier) / (turns + accuracy_multiplier)
         self._value = new_rating
         if self._certainty < 1:
             self._certainty += 0.02
@@ -161,7 +160,7 @@ class ChessUI(tk.Tk):
     def draw_board(self):
         for row in range(8):
             for col in range(8):
-                color = "white" if (row + col) % 2 == 0 else "gray"
+                color = "white" if (row + col) % 2 == 0 else "darkgoldenrod"
                 self.canvas.create_rectangle(
                     col * self.square_size, 
                     row * self.square_size, 
@@ -170,9 +169,34 @@ class ChessUI(tk.Tk):
                     fill=color
                 )
 
-    def draw_pieces(self):
+    def draw_pieces(self, initial_square = None, destination_square = None):
         # Clear the pieces first to avoid duplications
         self.clear_pieces()
+        
+        # Mark recent square moves
+        self.canvas.delete("marker")
+        if initial_square and destination_square:
+            col_initial = chess.square_file(initial_square)
+            row_initial = 7 - chess.square_rank(initial_square)
+            self.canvas.create_rectangle(
+                col_initial * self.square_size, 
+                row_initial * self.square_size, 
+                (col_initial + 1) * self.square_size, 
+                (row_initial + 1) * self.square_size, 
+                fill="yellow",
+                tag = "marker"
+            )
+            
+            col_destination = chess.square_file(destination_square)
+            row_destination = 7 - chess.square_rank(destination_square)
+            self.canvas.create_rectangle(
+                col_destination * self.square_size, 
+                row_destination * self.square_size, 
+                (col_destination + 1) * self.square_size, 
+                (row_destination + 1) * self.square_size, 
+                fill="yellow",
+                tag = "marker"
+            )
 
         # Redraw the pieces
         for square in chess.SQUARES:
@@ -245,7 +269,11 @@ class ChessUI(tk.Tk):
             if self.selected_square != square:
                 # Move the piece if it's a legal move
                 if self.selected_piece is not None:
-                    move = chess.Move(self.selected_square, square)
+                    # If the move is a pawn promotion
+                    if self.selected_piece.piece_type == chess.PAWN and (row == 0 or row == 7):
+                        move = chess.Move(self.selected_square, square, promotion=chess.QUEEN)
+                    else:
+                        move = chess.Move(self.selected_square, square)
                     if move in self.board.legal_moves:
                         # Assign board side if there is none selected 
                         global side
@@ -255,7 +283,7 @@ class ChessUI(tk.Tk):
                         old_board = board.copy()
                         self.board.push(move)
                         self.selected_piece = None
-                        self.draw_pieces()
+                        self.draw_pieces(self.selected_square, square)
                         
                         # Update the UI to show the pieces before the engine calculates its move
                         self.update_idletasks()
@@ -268,7 +296,7 @@ class ChessUI(tk.Tk):
                 else:
                     piece = self.board.piece_at(square)
                     if piece is not None and piece.color == self.board.turn:
-                        self.selected_piece = square
+                        self.selected_piece = piece
                     self.selected_square = square
  
 
@@ -327,12 +355,12 @@ def play_game():
         
     display_final_board_state(board)
     
-def print_board(board):
+def print_board(board, initial_square = None, destination_square = None):
     print(board)
     print("\n")
     
     global chess_ui
-    chess_ui.draw_pieces()    
+    chess_ui.draw_pieces(initial_square, destination_square)    
 
 def play_player_turn(board):
     while True:
@@ -379,12 +407,16 @@ def play_engine_turn(board):
     
     print("Engine played move: ", move_san)
 
-        # Convert the UCI string to a Move object
+    # Convert the UCI string to a Move object
     move_obj = parse_move_string(move_to_play, board)
     # Make the closest_to_zero move on the board
     board.push(move_obj)
     
-    print_board(board)
+    # Extract the starting and final squares for the marking
+    from_square = move_obj.from_square
+    to_square = move_obj.to_square
+    
+    print_board(board, from_square, to_square)
 
 
 def get_all_evaluations(board):
@@ -472,7 +504,7 @@ def decide_move_to_play(all_evaluations):
     # This variable makes the computer improve the targeted move evaluation if the difference between the first best move and the closest to zero is too high
     min_difference_to_choose_better_value = 1.0
     # This variable determines the power to which the rating determines the interpolation - Higher values of Power means less interpolation, but the higher the player's rating is, the more he is punished for mistakes 
-    rating_power = 3
+    rating_power = 4
     global side
     if side == chess.BLACK:
         if best_move[1]>move_evaluation_based_on_rating + min_difference_to_choose_better_value:
