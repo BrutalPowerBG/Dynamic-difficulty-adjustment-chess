@@ -1,8 +1,8 @@
 import chess
 import chess.engine
-import chess.svg
 import random
 import tkinter as tk
+import numpy as num
 from PIL import Image, ImageTk
 import os
 
@@ -120,12 +120,35 @@ class Rating:
         turns = self._turns_played
         old_rating = self._value
         # How much the new accuracy is relevant compared to the old accuracies 
-        accuracy_multiplier = 2 + min((turns/3.5), 12)
+        accuracy_multiplier = self.calculate_accuracy_multiplier(turns)
         new_rating = ( old_rating * turns + accuracy  * accuracy_multiplier) / (turns + accuracy_multiplier)
         self._value = new_rating
+        print("Move accuracy: ", accuracy)
+        print("Rating: ", new_rating)
         if self._certainty < 1:
-            self._certainty += 0.02
+            self._certainty += 0.04
         return new_rating
+    
+    def calculate_accuracy_multiplier(self, turns):
+        # Old accuracy_multiplier calculation
+        #
+        # accuracy_multiplier = 2 + min((turns/3.5), 8)
+        # # Reduce accuracy multiplier after turn 20 progressively until turn 40
+        # if turns / 10 >= 2:
+        #     accuracy_multiplier = accuracy_multiplier - min(turns / 10 , 4)
+        #
+        accuracy_multiplier = 1
+        if turns <= 20:
+            # Smooth transition from y=1 to y=6 between x=1 and x=20
+            accuracy_multiplier = 1 + 5 * (1 - num.cos(num.pi * (turns - 1) / 19)) / 2
+        elif turns <= 60:
+            # Smooth transition from y=6 to y=2 between x=20 and x=60
+            accuracy_multiplier = 6 - 4 * (1 - num.cos(num.pi * (turns - 20) / 40)) / 2
+        else:
+            # y stays at 2 for x > 60
+            accuracy_multiplier = 2
+        accuracy_multiplier = float(accuracy_multiplier)
+        return accuracy_multiplier
 
 
 
@@ -284,6 +307,7 @@ class ChessUI(tk.Tk):
                         self.board.push(move)
                         self.selected_piece = None
                         self.draw_pieces(self.selected_square, square)
+                        print("Player played move: ", move)
                         
                         # Update the UI to show the pieces before the engine calculates its move
                         self.update_idletasks()
@@ -308,6 +332,7 @@ def global_parameter_definitions():
     # Set the logical board
     global board
     board = chess.Board()
+
     # Set board scale
     global chess_ui_scale 
     chess_ui_scale = 800
@@ -333,13 +358,10 @@ def play_game():
         while not board.is_game_over():
             # Display the current board state
             print_board(board)
-
             play_engine_turn(board)
-            
     else:
         if side == chess.WHITE:
             while not board.is_game_over():
-               
                 if board.turn == chess.WHITE:
                     play_player_turn(board)
                 else:
@@ -371,6 +393,7 @@ def play_player_turn(board):
             update_player_rating(board, move)
             # Make the move on the board
             board.push(move)
+            print("Player played move: ", move)
             print_board(board)
             return move 
         else:
@@ -402,13 +425,24 @@ def play_engine_turn(board):
     all_evaluations = get_all_evaluations(board)
     print_evaluations(all_evaluations)
     
+    move_obj = None
     move_to_play = decide_move_to_play(all_evaluations)
-    move_san = board.san(chess.Move.from_uci(str(move_to_play)))
+    if move_to_play == None:
+        #Add game over function
+        return
+    if type(move_to_play) == str:
+        move_san = board.san(chess.Move.from_uci(str(move_to_play)))
+        # Convert the UCI string to a Move object
+        move_obj = parse_move_string(move_to_play, board)
+    elif isinstance(move_to_play, tuple):
+        move_san = board.san(chess.Move.from_uci(move_to_play[0]))
+         # Convert the UCI string to a Move object
+        move_obj = parse_move_string(move_to_play[0], board)
+    else:
+        raise ValueError("move_to_play value is neither a string nor a tuple")
     
     print("Engine played move: ", move_san)
 
-    # Convert the UCI string to a Move object
-    move_obj = parse_move_string(move_to_play, board)
     # Make the closest_to_zero move on the board
     board.push(move_obj)
     
@@ -434,7 +468,7 @@ def get_all_evaluations(board):
             board_copy.push(move)
 
             # Evaluate the position after the move
-            result = engine.analyse(board_copy, chess.engine.Limit(time=0.1))
+            result = engine.analyse(board_copy, chess.engine.Limit(time=0.05))
             # Convert the score to a numeric value
             evaluations[move.uci()] = result["score"].relative.score(mate_score=2000)  
             #Divide the score by 100 to make it closer to chess.com evaluation
@@ -476,6 +510,9 @@ def print_evaluations(all_evaluations):
 def decide_move_to_play(all_evaluations):
     if len(all_evaluations) == 1:
         return all_evaluations[0]
+    elif len(all_evaluations) == 0:
+        print("Game ended")
+        return None
     
     closest_to_zero_move = min(all_evaluations, key=lambda x: abs(x[1]))
     # Default move
@@ -494,7 +531,6 @@ def decide_move_to_play(all_evaluations):
     
     # Balance move with board state 
     # Linearly interpolate between evaluation based on rating and zero eval move, based on % certainty of the player rating
-    # weight = min(1, player_rating.certainty + abs(best_move[1]/10))
     if move_evaluation_based_on_rating > 0:
         move_evaluation_based_on_rating = linearly_interpolate(0, move_evaluation_based_on_rating, player_rating.certainty)
     else:
@@ -513,18 +549,33 @@ def decide_move_to_play(all_evaluations):
         if best_move[1]<move_evaluation_based_on_rating - min_difference_to_choose_better_value:
             move_evaluation_based_on_rating = linearly_interpolate(move_evaluation_based_on_rating, best_move[1], rating ** rating_power)
     
-    # Gets a random move within the range
-    moves_in_range_close = get_moves_within_range(move_evaluation_based_on_rating, all_evaluations, move_random_range)
-    if len(moves_in_range_close) > 0:
-        move = random.choice(moves_in_range_close)
+    
+    # Find a close suitable move
+    # Acceptable evaluation ranges of different categories of moves 
+    move_range_higher_value_piece_capture = move_random_range * 12
+    move_range_capture = move_random_range * 2
+    move_range_close = move_random_range
+    
+    # Find a move where a weaker piece captures a higher value piece
+    moves_in_range_capture_high_value = get_moves_within_range(move_evaluation_based_on_rating, all_evaluations, move_range_higher_value_piece_capture, True, True)
+    if len(moves_in_range_capture_high_value) > 0:
+        move = random.choice(moves_in_range_capture_high_value)
     else:
-        # If there are no moves in the close range, find a move where a weaker piece captures a higher value piece
-        moves_in_range_long = get_moves_within_range(move_evaluation_based_on_rating, all_evaluations, move_random_range * 10, True)
-        if len(moves_in_range_long) > 0:
-            move = random.choice(moves_in_range_long)
+        # Find a capture move within range 
+        moves_in_range_capture = get_moves_within_range(move_evaluation_based_on_rating, all_evaluations, move_range_capture, True)
+        if len(moves_in_range_capture) > 0:
+            move = random.choice(moves_in_range_capture)
         else:
-            # If we still can't find a move, just get the closest move to evaluation
-            move = get_move_closest_to_eval(move_evaluation_based_on_rating, all_evaluations)
+            # Get a random move within the range
+            moves_in_range_close = get_moves_within_range(move_evaluation_based_on_rating, all_evaluations, move_range_close)
+            if len(moves_in_range_close) > 0:
+                move = random.choice(moves_in_range_close)
+            else:
+                # If we still can't find a move, just get the closest move to evaluation
+                move = get_move_closest_to_eval(move_evaluation_based_on_rating, all_evaluations)
+    
+    if isinstance(move[0], tuple):
+        print(move[0])
     return move[0]
 
 def linearly_interpolate(worse_move, better_move, weight):
@@ -543,7 +594,7 @@ def get_move_closest_to_eval(target_eval, all_evaluations):
             
     return closest_move
 
-def get_moves_within_range(target_eval, all_evaluations, range, is_capture = False):
+def get_moves_within_range(target_eval, all_evaluations, range, is_capture = False, is_capture_by_weaker_piece = False):
     # Define the range
     lower_bound = target_eval - range
     upper_bound = target_eval + range
@@ -551,11 +602,19 @@ def get_moves_within_range(target_eval, all_evaluations, range, is_capture = Fal
     # Get moves within the specified range
     moves_in_range = [
         (move, evaluation)
-        for move, evaluation in all_evaluations if lower_bound <= evaluation <= upper_bound and (not is_capture or is_capture_by_weaker_piece(board, move))]
+        for move, evaluation in all_evaluations if lower_bound <= evaluation <= upper_bound and (not is_capture or is_move_capture(board, move)) and (not is_capture_by_weaker_piece or is_move_capture(board, move, True))]
 
     return moves_in_range
     
-def is_capture_by_weaker_piece(board, move):
+def is_move_capture(board, move, check_if_by_weaker_piece = False):
+    capturing_piece = board.piece_at(chess.Move.from_uci(move).from_square)
+    captured_piece = board.piece_at(chess.Move.from_uci(move).to_square)
+
+    if captured_piece is None:
+        return False  # Not a capture move
+    elif not check_if_by_weaker_piece:
+        return True
+    
     piece_values = {
         chess.PAWN: 1,
         chess.KNIGHT: 3,
@@ -564,12 +623,6 @@ def is_capture_by_weaker_piece(board, move):
         chess.QUEEN: 9,
         chess.KING: float('inf')
     }
-
-    capturing_piece = board.piece_at(chess.Move.from_uci(move).from_square)
-    captured_piece = board.piece_at(chess.Move.from_uci(move).to_square)
-
-    if captured_piece is None:
-        return False  # Not a capture move
 
     capturing_value = piece_values[capturing_piece.piece_type]
     captured_value = piece_values[captured_piece.piece_type]
