@@ -338,7 +338,7 @@ def global_parameter_definitions():
     chess_ui_scale = 800
     # Show chess UI board
     global chess_ui
-    chess_ui = ChessUI(800, 800)
+    chess_ui = ChessUI(1200, 1200)
     # Set Stockfish path
     global stockfish_path
     stockfish_path = "./stockfish/stockfish-windows-x86-64-avx2.exe"
